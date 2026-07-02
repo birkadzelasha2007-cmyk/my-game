@@ -1,0 +1,25 @@
+name: Build APK
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip build-essential git
+          sudo apt-get install -y zlib1g-dev libffi-dev libssl-dev
+          sudo apt-get install -y openjdk-17-jdk autoconf libtool pkg-config
+          pip3 install buildozer cython==0.29.33
+
+      - name: Build APK
+        run: buildozer android debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: war-apk
+          path: bin/*.apk
