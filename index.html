@@ -38,10 +38,6 @@ loadSound('heal','shoot.mp3',0.8); loadSound('levelup','boss_explode.wav',0.5);
 loadSound('gameover','boss_explode.wav',0.9); loadSound('music','music.mp3',0.35,true);
 
 /* ===================== სინთეზირებული ხმები (Web Audio API) ===================== */
-/* ყველა თამაშის ეფექტი გენერირდება კოდში, გარე აუდიო ფაილების გარეშე.            */
-/* master compressor/limiter იცავს ხმის "გადავსებისგან" (clipping) მაშინ,        */
-/* როცა ერთდროულად რამდენიმე ეფექტი ჟღერს.                                        */
-
 let actx = null, masterBus = null;
 function getActx(){
   if(!actx){
@@ -80,7 +76,6 @@ function synthShoot(kind){
   osc.connect(gain).connect(out());
   osc.start(t);
   osc.stop(t+dur+0.02);
-  // მოკლე "crack" ტრანზიენტი პუნჩისთვის, მხოლოდ მოთამაშისთვის
   if(kind==='player'){
     const cOsc = ac.createOscillator(), cGain = ac.createGain();
     cOsc.type='triangle'; cOsc.frequency.setValueAtTime(2200,t);
@@ -324,13 +319,16 @@ function calcSizes() {
   RU_W = Math.floor(U * 0.95);     RU_H = Math.floor(U * 1.0);
   BO_W = Math.floor(U * 2.1);      BO_H = Math.floor(U * 2.1);
   HE_W = Math.floor(U * 0.55);     HE_H = Math.floor(U * 0.55);
-  SH_W = Math.floor(U * 0.55);     SH_H = Math.floor(U * 0.55);
   
-  OB_W = EN_W;                     OB_H = EN_H;
+  // ფარი (shield) კიდევ უფრო გადიდდა (0.85-მდე)
+  SH_W = Math.floor(U * 0.85);     SH_H = Math.floor(U * 0.85);
+  
+  // ბომბი (bomb.png / obstacles) კიდევ უფრო გადიდდა (1.55x-მდე)
+  OB_W = Math.floor(EN_W * 1.55);  OB_H = Math.floor(EN_H * 1.55);
+
   PB_W = Math.floor(U * 0.45);     PB_H = Math.floor(U * 0.75); 
   EB_W = Math.floor(U * 0.35);     EB_H = Math.floor(U * 0.35); 
   AST_W = Math.floor(U * 2.8);     AST_H = Math.floor(U * 2.8);
-  SH_W = HE_W;                     SH_H = HE_H;
 }
 calcSizes();
 
@@ -410,8 +408,6 @@ let state='select',currentLevel=1,unlockedLevel=loadSave(),score=0,totalScore=0;
 let lastSpawn=0,spreadMode=false,levelMsg='',msgTimer=0,loadingStart=0;
 let touchX=W/2,touchY=H-100,touching=false;
 let player=null,enemies=[],bullets=[],enemyBullets=[],bosses=[],heals=[],shields=[],obstacles=[],particles=[];
-
-// მეტეორის / ასტეროიდის ცვლადები
 let giantMeteor=null;
 
 function explode(x,y,color){for(let i=0;i<EXPLOSION_CNT;i++){particles.push({x,y,vx:(Math.random()-0.5)*6,vy:(Math.random()-0.5)*6,life:8+Math.floor(Math.random()*8),maxLife:16,color,size:3+Math.floor(Math.random()*5)});}}
@@ -427,7 +423,6 @@ function resetGame(lv){
 function spawnEntities(){
   const lv=currentLevel;
   
-  // ცვლილება აქ: მიმდინარე ლეველი იყოფა 5-ზე და ნაშთი არის 4 (ანუ ყველა ოთახის მე-4 დონე, მაგ: 4, 9, 14, 19 ... 99)
   if(lv%5===4 && score >= (40 + lv*4) && !giantMeteor && bosses.length === 0) {
     enemies = [];
     giantMeteor = {
@@ -460,7 +455,10 @@ function createEnemy(mode,lv){
     speed:1.8+lv*0.11,lv,startX:sx,spawnT:now(),lastShot:now()};
 }
 function createBoss(lv){return{type:'boss',lv,rect:{x:W/2-BO_W/2,y:30,w:BO_W,h:BO_H},maxHp:300+lv*12,hp:300+lv*12,speed:2+Math.floor(lv/10),dir:1,lastShot:now()};}
-function createObstacle(lv){return{rect:{x:Math.floor(Math.random()*(W-OB_W)),y:-50,w:OB_W,h:OB_H},speed:2.2+lv*0.15};}
+function createObstacle(lv){
+  const sx=Math.floor(Math.random()*(W-OB_W));
+  return{rect:{x:sx,y:-50,w:OB_W,h:OB_H},speed:2.2+lv*0.15};
+}
 function createHeal(x,y){return{rect:{x:x-HE_W/2,y:y-HE_H/2,w:HE_W,h:HE_H}};}
 function createShield(x,y){return{rect:{x:x-SH_W/2,y:y-SH_H/2,w:SH_W,h:SH_H}};}
 function createBullet(x,y,vy,vx,type){const w=type==='player'?PB_W:EB_W,h=type==='player'?PB_H:EB_H;return{rect:{x:x-w/2,y:y-h,w,h},vy,vx,type};}
@@ -683,9 +681,15 @@ function drawSelect(){
     ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);
     ctx.fillStyle=unlocked?(isBoss?'#a83210':'#2d5fc3'):'#16162a';ctx.fill();
     ctx.lineWidth=3;ctx.strokeStyle=unlocked?(isBoss?'#ff8822':'#8fb8ff'):'#33334a';ctx.stroke();
-    if(isBoss&&unlocked)drawText('🔥',p.x,p.y-r-22,20,'#ff9966','center');
+    
     const fs=Math.max(12,Math.floor(r*0.6));
-    drawText(unlocked?String(lv):'🔒',p.x,p.y-fs/2,fs,unlocked?'#ffffff':'#555577','center',true);
+    if(unlocked){
+      if(isBoss)drawText('🔥',p.x,p.y-r-22,20,'#ff9966','center');
+      drawText(String(lv),p.x,p.y-fs/2,fs,'#ffffff','center',true);
+    } else {
+      // დახატულია ბოქლომი ჯერ არ გახსნილი დონეებისთვის
+      drawText('🔒',p.x,p.y-fs/2,fs,'#7777aa','center',true);
+    }
   }
 
   if(travel){
@@ -711,8 +715,16 @@ function drawSelect(){
   ctx.fillStyle='#aa1919cc';ctx.beginPath();ctx.roundRect(BTN_ROOM_RESET.x,BTN_ROOM_RESET.y,BTN_ROOM_RESET.w,BTN_ROOM_RESET.h,6);ctx.fill();
   drawText('RESET',BTN_ROOM_RESET.x+BTN_ROOM_RESET.w/2,BTN_ROOM_RESET.y+6,12,'#fff','center',true);
 
-  ctx.font='italic 11px Arial';ctx.fillStyle='#cccccc';ctx.textAlign='right';ctx.textBaseline='bottom';
-  ctx.fillText('© ლ.ბირკაძე',W-8,H-6);
+  // ლამაზი ლურჯი ავტოგრაფი მენიუს ბოლოში
+  ctx.save();
+  ctx.font = 'bold italic 16px Arial';
+  ctx.fillStyle = '#00bfff';
+  ctx.shadowColor = '#002244';
+  ctx.shadowBlur = 8;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('ავტორი: ლ. ბირკაძე', W - 16, H - 12);
+  ctx.restore();
 }
 
 function drawLoading(){
