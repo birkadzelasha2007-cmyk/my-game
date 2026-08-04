@@ -37,8 +37,271 @@ loadSound('boss_explode','boss_explode.wav',1.0); loadSound('player_hit','explod
 loadSound('heal','shoot.mp3',0.8); loadSound('levelup','boss_explode.wav',0.5);
 loadSound('gameover','boss_explode.wav',0.9); loadSound('music','music.mp3',0.35,true);
 
+/* ===================== სინთეზირებული ხმები (Web Audio API) ===================== */
+/* ყველა თამაშის ეფექტი გენერირდება კოდში, გარე აუდიო ფაილების გარეშე.            */
+/* master compressor/limiter იცავს ხმის "გადავსებისგან" (clipping) მაშინ,        */
+/* როცა ერთდროულად რამდენიმე ეფექტი ჟღერს.                                        */
+
+let actx = null, masterBus = null;
+function getActx(){
+  if(!actx){
+    try{
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      const comp = actx.createDynamicsCompressor();
+      comp.threshold.value = -20; comp.knee.value = 24; comp.ratio.value = 8;
+      comp.attack.value = 0.003; comp.release.value = 0.22;
+      const gain = actx.createGain();
+      gain.gain.value = 0.95;
+      comp.connect(gain).connect(actx.destination);
+      masterBus = comp;
+    }catch(e){ return null; }
+  }
+  if(actx && actx.state === 'suspended'){ actx.resume().catch(()=>{}); }
+  return actx;
+}
+function out(){ return masterBus; }
+
+function synthShoot(kind){
+  const ac = getActx(); if(!ac) return;
+  const t = ac.currentTime;
+  const detune = (Math.random()*24-12);
+  const osc = ac.createOscillator();
+  const gain = ac.createGain();
+  osc.type = kind==='boss' ? 'sawtooth' : 'square';
+  const startF = kind==='boss' ? 700 : (kind==='enemy' ? 500 : 950);
+  const endF   = kind==='boss' ? 140 : (kind==='enemy' ? 120 : 220);
+  const dur    = kind==='boss' ? 0.16 : 0.11;
+  const vol    = kind==='boss' ? 0.28 : (kind==='enemy' ? 0.16 : 0.22);
+  osc.detune.setValueAtTime(detune, t);
+  osc.frequency.setValueAtTime(startF, t);
+  osc.frequency.exponentialRampToValueAtTime(endF, t+dur);
+  gain.gain.setValueAtTime(vol, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t+dur);
+  osc.connect(gain).connect(out());
+  osc.start(t);
+  osc.stop(t+dur+0.02);
+  // მოკლე "crack" ტრანზიენტი პუნჩისთვის, მხოლოდ მოთამაშისთვის
+  if(kind==='player'){
+    const cOsc = ac.createOscillator(), cGain = ac.createGain();
+    cOsc.type='triangle'; cOsc.frequency.setValueAtTime(2200,t);
+    cGain.gain.setValueAtTime(0.12,t); cGain.gain.exponentialRampToValueAtTime(0.001,t+0.025);
+    cOsc.connect(cGain).connect(out()); cOsc.start(t); cOsc.stop(t+0.03);
+  }
+}
+
+function synthExplosion(big){
+  const ac = getActx(); if(!ac) return;
+  const t = ac.currentTime;
+  const dur = big ? 0.65 : 0.35;
+  const pitchJitter = 0.9 + Math.random()*0.2;
+
+  const bufferSize = Math.floor(ac.sampleRate * dur);
+  const buffer = ac.createBuffer(1, bufferSize, ac.sampleRate);
+  const data = buffer.getChannelData(0);
+  for(let i=0;i<bufferSize;i++){
+    data[i] = (Math.random()*2-1) * Math.pow(1-i/bufferSize, 2);
+  }
+  const noise = ac.createBufferSource();
+  noise.buffer = buffer;
+  const filter = ac.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime((big?1400:2000)*pitchJitter, t);
+  filter.frequency.exponentialRampToValueAtTime(90, t+dur);
+  const nGain = ac.createGain();
+  nGain.gain.setValueAtTime(big?0.9:0.55, t);
+  nGain.gain.exponentialRampToValueAtTime(0.001, t+dur);
+  noise.connect(filter).connect(nGain).connect(out());
+  noise.start(t);
+  noise.stop(t+dur);
+
+  const osc = ac.createOscillator();
+  const oGain = ac.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime((big?130:95)*pitchJitter, t);
+  osc.frequency.exponentialRampToValueAtTime(28, t+dur*0.85);
+  oGain.gain.setValueAtTime(big?0.7:0.4, t);
+  oGain.gain.exponentialRampToValueAtTime(0.001, t+dur*0.85);
+  osc.connect(oGain).connect(out());
+  osc.start(t);
+  osc.stop(t+dur*0.85+0.02);
+}
+
+function synthAlarm(){
+  const ac = getActx(); if(!ac) return;
+  const t = ac.currentTime;
+  const osc = ac.createOscillator();
+  const gain = ac.createGain();
+  osc.type = 'sawtooth';
+  const cycles = 3, cycleDur = 0.5;
+  for(let i=0;i<cycles;i++){
+    const st = t + i*cycleDur;
+    osc.frequency.setValueAtTime(440, st);
+    osc.frequency.linearRampToValueAtTime(880, st+cycleDur*0.5);
+    osc.frequency.linearRampToValueAtTime(440, st+cycleDur);
+  }
+  const totalDur = cycles*cycleDur;
+  gain.gain.setValueAtTime(0.001, t);
+  gain.gain.linearRampToValueAtTime(0.32, t+0.05);
+  gain.gain.setValueAtTime(0.32, t+totalDur-0.1);
+  gain.gain.exponentialRampToValueAtTime(0.001, t+totalDur);
+  osc.connect(gain).connect(out());
+  osc.start(t);
+  osc.stop(t+totalDur+0.05);
+  return totalDur;
+}
+
+function synthHeal(){
+  const ac = getActx(); if(!ac) return;
+  const t = ac.currentTime;
+  [520,660,880].forEach((f,i)=>{
+    const st=t+i*0.07;
+    const osc=ac.createOscillator(), g=ac.createGain();
+    osc.type='sine'; osc.frequency.setValueAtTime(f,st);
+    g.gain.setValueAtTime(0.0001,st);
+    g.gain.linearRampToValueAtTime(0.28,st+0.02);
+    g.gain.exponentialRampToValueAtTime(0.001,st+0.22);
+    osc.connect(g).connect(out());
+    osc.start(st); osc.stop(st+0.24);
+  });
+}
+
+function synthShieldPickup(){
+  const ac = getActx(); if(!ac) return;
+  const t = ac.currentTime;
+  const osc1=ac.createOscillator(), osc2=ac.createOscillator(), g=ac.createGain();
+  osc1.type='sine'; osc2.type='sine';
+  osc1.frequency.setValueAtTime(700,t); osc2.frequency.setValueAtTime(704,t);
+  osc1.frequency.exponentialRampToValueAtTime(1400,t+0.18);
+  osc2.frequency.exponentialRampToValueAtTime(1408,t+0.18);
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.linearRampToValueAtTime(0.25,t+0.02);
+  g.gain.exponentialRampToValueAtTime(0.001,t+0.3);
+  osc1.connect(g); osc2.connect(g); g.connect(out());
+  osc1.start(t); osc2.start(t);
+  osc1.stop(t+0.32); osc2.stop(t+0.32);
+}
+
+function synthPlayerHit(){
+  const ac = getActx(); if(!ac) return;
+  const t = ac.currentTime;
+  const dur=0.22;
+  const bufferSize=Math.floor(ac.sampleRate*dur);
+  const buffer=ac.createBuffer(1,bufferSize,ac.sampleRate);
+  const data=buffer.getChannelData(0);
+  for(let i=0;i<bufferSize;i++) data[i]=(Math.random()*2-1)*Math.pow(1-i/bufferSize,3);
+  const noise=ac.createBufferSource(); noise.buffer=buffer;
+  const filt=ac.createBiquadFilter(); filt.type='bandpass'; filt.frequency.value=900; filt.Q.value=0.7;
+  const g=ac.createGain();
+  g.gain.setValueAtTime(0.5,t);
+  g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  noise.connect(filt).connect(g).connect(out());
+  noise.start(t); noise.stop(t+dur);
+
+  const osc=ac.createOscillator(), og=ac.createGain();
+  osc.type='square';
+  osc.frequency.setValueAtTime(160,t);
+  osc.frequency.exponentialRampToValueAtTime(60,t+0.15);
+  og.gain.setValueAtTime(0.35,t);
+  og.gain.exponentialRampToValueAtTime(0.001,t+0.15);
+  osc.connect(og).connect(out());
+  osc.start(t); osc.stop(t+0.17);
+}
+
+function synthLevelUp(){
+  const ac = getActx(); if(!ac) return;
+  const t = ac.currentTime;
+  [523.25,659.25,783.99,1046.5].forEach((f,i)=>{
+    const st=t+i*0.09;
+    const osc=ac.createOscillator(), g=ac.createGain();
+    osc.type='triangle'; osc.frequency.setValueAtTime(f,st);
+    g.gain.setValueAtTime(0.0001,st);
+    g.gain.linearRampToValueAtTime(0.3,st+0.015);
+    g.gain.exponentialRampToValueAtTime(0.001,st+0.35);
+    osc.connect(g).connect(out());
+    osc.start(st); osc.stop(st+0.37);
+  });
+}
+
+function synthGameOver(){
+  const ac = getActx(); if(!ac) return;
+  synthExplosion(true);
+  const t = ac.currentTime;
+  [440,392,349.23,261.63].forEach((f,i)=>{
+    const st=t+0.1+i*0.18;
+    const osc=ac.createOscillator(), g=ac.createGain();
+    osc.type='sawtooth'; osc.frequency.setValueAtTime(f,st);
+    g.gain.setValueAtTime(0.0001,st);
+    g.gain.linearRampToValueAtTime(0.26,st+0.02);
+    g.gain.exponentialRampToValueAtTime(0.001,st+0.5);
+    osc.connect(g).connect(out());
+    osc.start(st); osc.stop(st+0.52);
+  });
+}
+
+function synthBossVictory(){
+  const ac = getActx(); if(!ac) return;
+  synthExplosion(true);
+  const t = ac.currentTime;
+  [784,988,1175,1568].forEach((f,i)=>{
+    const st=t+0.15+i*0.06;
+    const osc=ac.createOscillator(), g=ac.createGain();
+    osc.type='sine'; osc.frequency.setValueAtTime(f,st);
+    g.gain.setValueAtTime(0.0001,st);
+    g.gain.linearRampToValueAtTime(0.2,st+0.01);
+    g.gain.exponentialRampToValueAtTime(0.001,st+0.2);
+    osc.connect(g).connect(out());
+    osc.start(st); osc.stop(st+0.22);
+  });
+}
+
+function synthBossWarning(){
+  const ac = getActx(); if(!ac) return;
+  const t = ac.currentTime;
+  const osc=ac.createOscillator(), g=ac.createGain();
+  osc.type='sawtooth';
+  osc.frequency.setValueAtTime(80,t);
+  osc.frequency.linearRampToValueAtTime(55,t+0.6);
+  g.gain.setValueAtTime(0.001,t);
+  g.gain.linearRampToValueAtTime(0.4,t+0.05);
+  g.gain.setValueAtTime(0.4,t+0.5);
+  g.gain.exponentialRampToValueAtTime(0.001,t+0.65);
+  osc.connect(g).connect(out());
+  osc.start(t); osc.stop(t+0.67);
+}
+
+function synthUIClick(){
+  const ac = getActx(); if(!ac) return;
+  const t = ac.currentTime;
+  const osc=ac.createOscillator(), g=ac.createGain();
+  osc.type='sine';
+  osc.frequency.setValueAtTime(1000,t);
+  osc.frequency.exponentialRampToValueAtTime(600,t+0.05);
+  g.gain.setValueAtTime(0.18,t);
+  g.gain.exponentialRampToValueAtTime(0.001,t+0.06);
+  osc.connect(g).connect(out());
+  osc.start(t); osc.stop(t+0.07);
+}
+/* =================== სინთეზირებული ხმების ბოლო =================== */
+
 let musicStarted=false;
-function playSound(key){try{if(!SND[key])return;const s=SND[key].cloneNode();s.volume=SND[key].volume;s.play().catch(()=>{});}catch(e){}}
+function playSound(key){
+  try{
+    if(key==='shoot'){ synthShoot('player'); return; }
+    if(key==='enemy_shoot'){ synthShoot('enemy'); return; }
+    if(key==='boss_shoot'){ synthShoot('boss'); return; }
+    if(key==='explode'){ synthExplosion(false); return; }
+    if(key==='player_hit'){ synthPlayerHit(); return; }
+    if(key==='heal'){ synthHeal(); return; }
+    if(key==='shield_pickup'){ synthShieldPickup(); return; }
+    if(key==='levelup'){ synthLevelUp(); return; }
+    if(key==='gameover'){ synthGameOver(); return; }
+    if(key==='boss_explode'){ synthBossVictory(); return; }
+    if(key==='boss_spawn'){ synthBossWarning(); return; }
+    if(key==='ui_click'){ synthUIClick(); return; }
+    if(key==='meteor_alarm'){ return synthAlarm(); }
+    if(!SND[key])return;const s=SND[key].cloneNode();s.volume=SND[key].volume;s.play().catch(()=>{});
+  }catch(e){}
+}
 function startMusic(){if(musicStarted||!SND['music'])return;musicStarted=true;SND['music'].play().catch(()=>{});}
 function stopMusic(){try{if(SND['music']){SND['music'].pause();SND['music'].currentTime=0;musicStarted=false;}}catch(e){}}
 
@@ -63,10 +326,11 @@ function calcSizes() {
   HE_W = Math.floor(U * 0.55);     HE_H = Math.floor(U * 0.55);
   SH_W = Math.floor(U * 0.55);     SH_H = Math.floor(U * 0.55);
   
-  OB_W = Math.floor(U * 0.45);     OB_H = Math.floor(U * 0.45); 
+  OB_W = EN_W;                     OB_H = EN_H;
   PB_W = Math.floor(U * 0.45);     PB_H = Math.floor(U * 0.75); 
   EB_W = Math.floor(U * 0.35);     EB_H = Math.floor(U * 0.35); 
   AST_W = Math.floor(U * 2.8);     AST_H = Math.floor(U * 2.8);
+  SH_W = HE_W;                     SH_H = HE_H;
 }
 calcSizes();
 
@@ -87,12 +351,24 @@ function calcButtons(){
 }
 calcButtons();
 
-const TOTAL_ROOMS=20, LEVELS_PER_ROOM=5;
+const TOTAL_ROOMS=5, LEVELS_PER_ROOM=20;
 let currentRoom=0;
 const ROOM_IMG_KEYS=['room1','room2','room3','room4','room5'];
-const ROOM_PATH_FRAC=[
-  {x:0.22,y:0.80},{x:0.78,y:0.65},{x:0.24,y:0.50},{x:0.76,y:0.34},{x:0.50,y:0.16}
-];
+const ROOM_PATH_COLUMNS=4;
+function generateRoomPathFrac(n,columns){
+  const rows=Math.ceil(n/columns);
+  const pts=[];
+  for(let i=0;i<n;i++){
+    const row=Math.floor(i/columns);
+    let col=i%columns;
+    if(row%2===1) col=columns-1-col;
+    const yFrac = rows>1 ? (0.92 - row*(0.80/(rows-1))) : 0.5;
+    const xFrac = columns>1 ? (0.14 + col*((1-0.28)/(columns-1))) : 0.5;
+    pts.push({x:xFrac,y:yFrac});
+  }
+  return pts;
+}
+const ROOM_PATH_FRAC=generateRoomPathFrac(LEVELS_PER_ROOM,ROOM_PATH_COLUMNS);
 function roomOfLevel(lv){return Math.floor((lv-1)/LEVELS_PER_ROOM);}
 function roomStartLevel(room){return room*LEVELS_PER_ROOM+1;}
 function unlockedCountInRoom(room){
@@ -157,15 +433,17 @@ function spawnEntities(){
     giantMeteor = {
       rect: { x: W/2 - AST_W/2, y: -AST_H - 50, w: AST_W, h: AST_H },
       speed: 4.5,
-      shakeTimer: 60
+      shakeTimer: 60,
+      alarmDur: 1500,
+      lastAlarm: now()
     };
     levelMsg = "⚠ METEOR INCOMING! ⚠";
     msgTimer = now();
-    playSound('boss_explode');
+    const d=playSound('meteor_alarm'); if(d)giantMeteor.alarmDur=d*1000;
     return;
   }
 
-  if(lv%5===0&&bosses.length===0 && !giantMeteor)bosses.push(createBoss(lv));
+  if(lv%5===0&&bosses.length===0 && !giantMeteor){bosses.push(createBoss(lv));playSound('boss_spawn');}
   const delay=Math.max(MIN_SPAWN,SPAWN_INTERVAL-lv*10);
   if(bosses.length===0&&!giantMeteor&&now()-lastSpawn>delay){
     if(enemies.length<=MAX_ENEMIES-3){enemies.push(createEnemy('shooter',lv));enemies.push(createEnemy('rusher',lv));enemies.push(createEnemy('rusher',lv));}
@@ -205,6 +483,10 @@ function updateGame(){
   if(giantMeteor){
     giantMeteor.rect.y += giantMeteor.speed;
     if(giantMeteor.shakeTimer > 0) giantMeteor.shakeTimer--;
+    if(t-giantMeteor.lastAlarm > giantMeteor.alarmDur-50){
+      const d=playSound('meteor_alarm'); giantMeteor.alarmDur=d?d*1000:giantMeteor.alarmDur;
+      giantMeteor.lastAlarm=t;
+    }
     
     if(player && rectHit(player.rect, giantMeteor.rect)){
       playSound('gameover'); stopMusic(); state='gameover'; return;
@@ -273,7 +555,7 @@ function updateGame(){
 
   if(player){
     for(let hi=heals.length-1;hi>=0;hi--){if(rectHit(player.rect,heals[hi].rect)){player.hp=Math.min(PLAYER_HP,player.hp+HEAL_AMOUNT);heals.splice(hi,1);playSound('heal');}}
-    for(let si=shields.length-1;si>=0;si--){if(rectHit(player.rect,shields[si].rect)){player.shield=SHIELD_MAX;shields.splice(si,1);explode(player.rect.x+player.rect.w/2,player.rect.y+player.rect.h/2,'#00ffff');playSound('heal');}}
+    for(let si=shields.length-1;si>=0;si--){if(rectHit(player.rect,shields[si].rect)){player.shield=SHIELD_MAX;shields.splice(si,1);explode(player.rect.x+player.rect.w/2,player.rect.y+player.rect.h/2,'#00ffff');playSound('shield_pickup');}}
     
     let hit_=false;
     for(const eb of enemyBullets)if(rectHit(player.rect,eb.rect)){hit_=true;break;}
@@ -394,7 +676,7 @@ function drawSelect(){
     ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(m.x,m.y);ctx.strokeStyle='#66ffcc';ctx.lineWidth=Math.max(3,Math.floor(U*0.1));ctx.stroke();
   }
 
-  const nodeR=Math.max(20,Math.floor(U*0.5));
+  const nodeR=Math.max(13,Math.floor(U*0.26));
   for(let i=0;i<LEVELS_PER_ROOM;i++){
     const lv=startLv+i,unlocked=lv<=unlockedLevel,isBoss=(i===LEVELS_PER_ROOM-1);
     const p=pts[i],r=isBoss?nodeR*1.35:nodeR;
@@ -515,24 +797,25 @@ function getTouchPos(e){const t=e.touches?e.touches[0]||e.changedTouches[0]:e;co
 
 function handleTap(mx,my){
   if(state==='play'||state==='paused'){
-    if(pointInRect(mx,my,BTN_PAUSE)){state=state==='paused'?'play':'paused';return;}
-    if(pointInRect(mx,my,BTN_EXIT)){stopMusic();state='select';return;}
-    if(state==='paused'&&pointInRect(mx,my,BTN_MENU)){stopMusic();state='select';return;}
-    if(pointInRect(mx,my,BTN_SPREAD)){spreadMode=!spreadMode;return;}
+    if(pointInRect(mx,my,BTN_PAUSE)){playSound('ui_click');state=state==='paused'?'play':'paused';return;}
+    if(pointInRect(mx,my,BTN_EXIT)){playSound('ui_click');stopMusic();state='select';return;}
+    if(state==='paused'&&pointInRect(mx,my,BTN_MENU)){playSound('ui_click');stopMusic();state='select';return;}
+    if(pointInRect(mx,my,BTN_SPREAD)){playSound('ui_click');spreadMode=!spreadMode;return;}
   }
   if(state==='select'){
     if(travel)return;
-    if(pointInRect(mx,my,BTN_ROOM_RESET)){unlockedLevel=1;doSave(1);currentRoom=0;return;}
-    if(pointInRect(mx,my,BTN_ROOM_PREV)){if(currentRoom>0)currentRoom--;return;}
-    if(pointInRect(mx,my,BTN_ROOM_NEXT)){if(currentRoom<TOTAL_ROOMS-1)currentRoom++;return;}
+    if(pointInRect(mx,my,BTN_ROOM_RESET)){playSound('ui_click');unlockedLevel=1;doSave(1);currentRoom=0;return;}
+    if(pointInRect(mx,my,BTN_ROOM_PREV)){if(currentRoom>0){playSound('ui_click');currentRoom--;}return;}
+    if(pointInRect(mx,my,BTN_ROOM_NEXT)){if(currentRoom<TOTAL_ROOMS-1){playSound('ui_click');currentRoom++;}return;}
     const pts=roomNodePoints();
     const startLv=roomStartLevel(currentRoom);
-    const nodeR=Math.max(20,Math.floor(U*0.5));
+    const nodeR=Math.max(13,Math.floor(U*0.26));
     const uCount=unlockedCountInRoom(currentRoom);
     for(let i=0;i<LEVELS_PER_ROOM;i++){
       const lv=startLv+i,isBoss=(i===LEVELS_PER_ROOM-1),r=isBoss?nodeR*1.35:nodeR,p=pts[i];
       const dx=mx-p.x,dy=my-p.y;
       if(lv<=unlockedLevel&&dx*dx+dy*dy<=r*r){
+        playSound('ui_click');
         const fromIdx=uCount>0?uCount-1:0;
         if(fromIdx===i)resetGame(lv);else startTravel(fromIdx,i,lv);
         return;
